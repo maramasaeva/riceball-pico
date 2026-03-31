@@ -17,17 +17,16 @@ import ntptime
 # ----------------------------
 # USER SETTINGS
 # ----------------------------
-# WiFi credentials
+# WiFi credentials - loaded from wifi_config.py (not in git)
+# Create wifi_config.py with: WIFI_NETWORKS = [("ssid", "password"), ...]
 # Note: Pico W only supports 2.4GHz networks (not 5GHz)
-# Make sure your WiFi network is 2.4GHz compatible
-WIFI_NETWORKS = [
-    ("telenet-689152F", "hQ8mswjp7kaS"),
-    ("marrgiela", "K3t3lb!nK!3"),
-]
+try:
+    from wifi_config import WIFI_NETWORKS
+except ImportError:
+    WIFI_NETWORKS = []
 
-# Belgium: CET is +1, CEST is +2. This is a simple fixed offset.
-# If you want DST-aware later, we can add it.
-TZ_OFFSET_HOURS = 1
+# Belgium: CET is +1, CEST is +2. Auto-detected via EU DST rules.
+TZ_BASE_OFFSET = 1  # CET base offset from UTC
 
 # Animation smoothness
 FRAME_DELAY = 0.08     # matches your smooth loop
@@ -559,11 +558,44 @@ WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun",
           "jul", "aug", "sep", "oct", "nov", "dec"]
 
+def last_sunday_of_month(year, month):
+    """Find the day-of-month for the last Sunday of a given month."""
+    if month == 3:
+        days_in_month = 31
+    elif month == 10:
+        days_in_month = 31
+    else:
+        return 0
+    # Jan 1 2000 was a Saturday (weekday 5 in MicroPython: 0=Mon..6=Sun)
+    # Calculate weekday of last day of month using Tomohiko Sakamoto's method
+    t_table = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    y = year - (1 if month < 3 else 0)
+    wday_last = (y + y // 4 - y // 100 + y // 400 + t_table[month - 1] + days_in_month) % 7
+    # wday_last: 0=Sun, 1=Mon, ..., 6=Sat
+    offset = wday_last  # days to subtract to get to Sunday
+    return days_in_month - offset
+
+def is_eu_dst(utc_tuple):
+    """Check if a UTC time falls within EU summer time (CEST).
+    EU DST: starts last Sunday of March at 01:00 UTC,
+            ends last Sunday of October at 01:00 UTC."""
+    year, month, mday, hour = utc_tuple[0], utc_tuple[1], utc_tuple[2], utc_tuple[3]
+    if month < 3 or month > 10:
+        return False
+    if month > 3 and month < 10:
+        return True
+    dst_switch_day = last_sunday_of_month(year, month)
+    if month == 3:
+        return mday > dst_switch_day or (mday == dst_switch_day and hour >= 1)
+    else:  # October
+        return mday < dst_switch_day or (mday == dst_switch_day and hour < 1)
+
 def localtime_tuple():
-    # MicroPython time.localtime() gives (year, month, mday, hour, minute, second, weekday, yearday)
-    # Apply fixed offset for local clock.
-    t = time.time() + (TZ_OFFSET_HOURS * 3600)
-    return time.localtime(t)
+    utc_secs = time.time()
+    utc_t = time.localtime(utc_secs)
+    dst = 1 if is_eu_dst(utc_t) else 0
+    local_secs = utc_secs + ((TZ_BASE_OFFSET + dst) * 3600)
+    return time.localtime(local_secs)
 
 def pick_greeting(hour):
     if hour < 12:
